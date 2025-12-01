@@ -7,11 +7,13 @@ HINSTANCE hInst;
 WCHAR szTitle[100];
 WCHAR szWindowClass[100];
 
-enum SHAPE_TYPE { SHAPE_NONE, SHAPE_LINE, SHAPE_RECT, SHAPE_ELLIPSE, SHAPE_FREE };
+HWND gWnd[2];
+int gWndCount = 0;
 
+enum SHAPE_TYPE { SHAPE_NONE, SHAPE_LINE, SHAPE_RECT, SHAPE_ELLIPSE, SHAPE_FREE };
 struct DrawAttr { int thickness; COLORREF color; };
 
-bool gTransparent = false;
+bool gTransparent = true;
 
 class Shape {
 public:
@@ -81,19 +83,25 @@ public:
         HPEN p = CreatePen(PS_SOLID, attr.thickness, attr.color);
         HPEN op = (HPEN)SelectObject(hdc, p);
         MoveToEx(hdc, pts[0].x, pts[0].y, NULL);
-        for (size_t i = 1; i < pts.size(); i++)
-            LineTo(hdc, pts[i].x, pts[i].y);
+        for (size_t i = 1; i < pts.size(); i++) LineTo(hdc, pts[i].x, pts[i].y);
         SelectObject(hdc, op);
         DeleteObject(p);
     }
 };
 
 std::vector<Shape*> shapes;
-SHAPE_TYPE gShape = SHAPE_NONE;
+SHAPE_TYPE gShape = SHAPE_FREE;
 DrawAttr gAttr = { 1, RGB(0,0,0) };
 bool gDraw = false;
 POINT gStart, gTemp;
 FreeLine* gFree = nullptr;
+
+void SyncInvalidate() {
+    for (int i = 0; i < gWndCount; i++) InvalidateRect(gWnd[i], NULL, TRUE);
+}
+void SyncInvalidateFast() {
+    for (int i = 0; i < gWndCount; i++) InvalidateRect(gWnd[i], NULL, FALSE);
+}
 
 void DrawAll(HDC hdc)
 {
@@ -128,8 +136,9 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
-    LoadStringW(hInstance, IDS_APP_TITLE, szTitle, 100);
+    wcscpy_s(szTitle, L"DrawingBoard_Asynchronous");
     LoadStringW(hInstance, IDC_MY20250920DRAWINGBOARD, szWindowClass, 100);
+
     MyRegisterClass(hInstance);
     if (!InitInstance(hInstance, nCmdShow)) return FALSE;
 
@@ -158,14 +167,31 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
     hInst = hInstance;
-    HWND hWnd = CreateWindowW(szWindowClass, szTitle,
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, 900, 700,
+    int w = 900, h = 700;
+
+    HWND left = CreateWindowW(
+        szWindowClass, szTitle,
+        WS_OVERLAPPEDWINDOW,
+        0, 0, w, h,
         NULL, NULL, hInstance, NULL);
 
-    if (!hWnd) return FALSE;
+    HWND right = CreateWindowW(
+        szWindowClass, szTitle,
+        WS_OVERLAPPEDWINDOW,
+        w + 20, 0, w, h,
+        NULL, NULL, hInstance, NULL);
 
-    ShowWindow(hWnd, nCmdShow);
-    UpdateWindow(hWnd);
+    if (!left || !right) return FALSE;
+
+    gWnd[0] = left;
+    gWnd[1] = right;
+    gWndCount = 2;
+
+    ShowWindow(left, nCmdShow);
+    UpdateWindow(left);
+    ShowWindow(right, nCmdShow);
+    UpdateWindow(right);
+
     return TRUE;
 }
 
@@ -178,7 +204,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
         int id = LOWORD(wp);
 
         if (id == IDM_EXIT) DestroyWindow(hWnd);
-        else if (id == IDM_ABOUT) MessageBox(hWnd, L"DrawingBoard 1.0", L"About", MB_OK);
+        else if (id == IDM_ABOUT) MessageBox(hWnd, L"DrawingBoard_Asynchronous", L"About", MB_OK);
 
         else if (id == ID_SHAPE_LINE) gShape = SHAPE_LINE;
         else if (id == ID_SHAPE_RECT) gShape = SHAPE_RECT;
@@ -194,14 +220,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
         else if (id == ID_COLOR_RED) { gTransparent = false; gAttr.color = RGB(200, 100, 100); }
         else if (id == ID_COLOR_TRANSPARENT) gTransparent = true;
 
-        InvalidateRect(hWnd, NULL, TRUE);
+        SyncInvalidate();
     }
     break;
 
     case WM_LBUTTONDOWN:
-    {
         gDraw = true;
-        gStart = { LOWORD(lp), HIWORD(lp) };
+        gStart = { LOWORD(lp),HIWORD(lp) };
         gTemp = gStart;
 
         if (gShape == SHAPE_FREE) {
@@ -209,33 +234,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
             gFree = new FreeLine(gAttr, gTransparent);
             gFree->pts.push_back(gStart);
         }
-
         SetCapture(hWnd);
-    }
         break;
 
     case WM_MOUSEMOVE:
-    {
         if (gDraw && (wp & MK_LBUTTON)) {
-            POINT p = { LOWORD(lp), HIWORD(lp) };
+            POINT p = { LOWORD(lp),HIWORD(lp) };
             if (gShape == SHAPE_FREE) gFree->pts.push_back(p);
             else gTemp = p;
-            InvalidateRect(hWnd, NULL, FALSE);
+            SyncInvalidateFast();
         }
-    }
         break;
 
     case WM_LBUTTONUP:
     {
-        POINT e;        // ← 선언만 먼저
-        Shape* s = nullptr;
-
         if (!gDraw) break;
         gDraw = false;
         ReleaseCapture();
-
-        e.x = LOWORD(lp);
-        e.y = HIWORD(lp);
+        POINT e = { LOWORD(lp),HIWORD(lp) };
+        Shape* s = nullptr;
 
         if (gShape == SHAPE_LINE) s = new Line(gStart, e, gAttr, gTransparent);
         else if (gShape == SHAPE_RECT) s = new RectShape(gStart, e, gAttr, gTransparent);
@@ -243,10 +260,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
         else if (gShape == SHAPE_FREE) { s = gFree; gFree = nullptr; }
 
         if (s) shapes.push_back(s);
-        InvalidateRect(hWnd, NULL, TRUE);
+        SyncInvalidate();
     }
-        break;
-
+    break;
 
     case WM_PAINT:
     {
@@ -255,7 +271,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
         DrawAll(hdc);
         EndPaint(hWnd, &ps);
     }
-        break;
+    break;
 
     case WM_ERASEBKGND:
         return 1;
